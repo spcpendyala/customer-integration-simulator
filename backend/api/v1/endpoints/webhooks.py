@@ -16,7 +16,14 @@ async def receive_webhook(integration_type: str, request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail='Invalid JSON payload')
 
-    event_type = payload.get('event_type', 'unknown')
+    # Support multiple payload structures
+    event_type = (
+        payload.get('event_type') or
+        payload.get('type') or
+        payload.get('topic') or
+        'unknown'
+    )
+
     event_id = str(uuid4())
     now = datetime.utcnow()
 
@@ -24,7 +31,7 @@ async def receive_webhook(integration_type: str, request: Request):
         'event_id': event_id,
         'integration_type': integration_type,
         'event_type': event_type,
-        'payload': json.dumps(payload),  # ← proper JSON string
+        'payload': json.dumps(payload),
         'status': EventStatus.RECEIVED.value,
         'retry_count': 0,
         'max_retries': 3,

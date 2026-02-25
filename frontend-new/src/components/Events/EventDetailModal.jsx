@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { ClipboardDocumentIcon, CheckIcon } from '@heroicons/react/24/outline';
 import apiClient from '../../api/client';
 import { STATUS_COLORS } from '../../utils/constants';
 import { formatTimestamp, formatDuration } from '../../utils/formatters';
@@ -7,6 +8,7 @@ import AIDebugger from '../AIDebugger/AIDebugger';
 const EventDetailModal = ({ event, onClose }) => {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     const fetchLogs = async () => {
@@ -22,12 +24,44 @@ const EventDetailModal = ({ event, onClose }) => {
     fetchLogs();
   }, [event.event_id]);
 
+  const handleCopy = () => {
+    const text = JSON.stringify({
+      event_id: event.event_id,
+      integration_type: event.integration_type,
+      event_type: event.event_type,
+      status: event.status,
+      retry_count: event.retry_count,
+      max_retries: event.max_retries,
+      failure_type: event.failure_type,
+      failure_reason: event.failure_reason,
+      processing_duration_ms: event.processing_duration_ms,
+      created_at: event.created_at,
+      updated_at: event.updated_at,
+      logs: logs,
+    }, null, 2);
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
     <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4'>
       <div className='bg-white rounded-lg max-w-2xl w-full max-h-[80vh] overflow-y-auto'>
         <div className='flex justify-between items-center p-6 border-b'>
           <h2 className='text-lg font-semibold'>Event Details</h2>
-          <button onClick={onClose} className='text-gray-400 hover:text-gray-600 text-2xl'>&times;</button>
+          <div className='flex items-center gap-3'>
+            <button
+              onClick={handleCopy}
+              className='flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600'
+              title='Copy event details'
+            >
+              {copied
+                ? <><CheckIcon className='h-4 w-4 text-green-600' /><span className='text-green-600'>Copied!</span></>
+                : <><ClipboardDocumentIcon className='h-4 w-4' /><span>Copy</span></>
+              }
+            </button>
+            <button onClick={onClose} className='text-gray-400 hover:text-gray-600 text-2xl'>&times;</button>
+          </div>
         </div>
 
         <div className='p-6 space-y-4'>

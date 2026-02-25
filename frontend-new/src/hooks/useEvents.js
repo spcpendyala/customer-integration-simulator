@@ -9,7 +9,7 @@ export const useEvents = (refreshInterval = 5000) => {
   useEffect(() => {
     const fetchEvents = async () => {
       try {
-        const { data } = await apiClient.get('/events');
+        const { data } = await apiClient.get('/events?limit=500');
         setEvents(data);
         setError(null);
       } catch (e) {

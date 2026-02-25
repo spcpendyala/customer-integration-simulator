@@ -10,10 +10,7 @@ class FailureEngine:
     def __init__(self, failure_rate: float = None):
         self.failure_rate = failure_rate or settings.default_failure_rate
 
-    def determine_outcome(self, force_fail: bool = False) -> tuple[str, FailureType | None]:
-        if force_fail:
-            return 'permanent_failure', FailureType.VALIDATION_ERROR
-
+    def determine_outcome(self) -> tuple[str, FailureType | None]:
         roll = random.random()
         if roll < 0.50:
             return 'success', None
@@ -38,7 +35,6 @@ class EventProcessor:
         log_repo = LogRepository(self.session)
 
         event_id = event_data['event_id']
-        force_fail = event_data.get('event_type') == 'force_failure'
         start_time = time.time()
 
         # RECEIVED → VALIDATED
@@ -77,7 +73,7 @@ class EventProcessor:
             'timestamp': datetime.utcnow()
         })
 
-        outcome, failure_type = self.failure_engine.determine_outcome(force_fail=force_fail)
+        outcome, failure_type = self.failure_engine.determine_outcome()
         latency_ms = int((time.time() - start_time) * 1000)
 
         if outcome == 'success' or outcome == 'high_latency':
@@ -100,9 +96,10 @@ class EventProcessor:
             return {'status': 'success', 'latency_ms': latency_ms}
 
         elif outcome == 'timeout':
+            # Set TIMED_OUT and pause so it's visible in dashboard
             event_repo.update_event_status(
                 event_id, EventStatus.TIMED_OUT,
-                {'failure_type': failure_type.value, 'failure_reason': 'Processing timeout'}
+                {'failure_type': failure_type.value, 'failure_reason': 'Processing timeout — exceeded threshold'}
             )
             log_repo.create_log({
                 'log_id': str(uuid4()),
@@ -113,12 +110,15 @@ class EventProcessor:
                 'duration_ms': latency_ms,
                 'timestamp': datetime.utcnow()
             })
+            self.session.commit()
+            time.sleep(2)  # Pause so timed_out is visible in dashboard
             return self._handle_retry(event_id, event_data, event_repo, log_repo, failure_type)
 
         elif outcome == 'temporary_failure':
+            # Set FAILED and pause so it's visible in dashboard
             event_repo.update_event_status(
                 event_id, EventStatus.FAILED,
-                {'failure_type': failure_type.value, 'failure_reason': 'Temporary server error'}
+                {'failure_type': failure_type.value, 'failure_reason': 'Temporary server error — service unavailable'}
             )
             log_repo.create_log({
                 'log_id': str(uuid4()),
@@ -129,6 +129,8 @@ class EventProcessor:
                 'duration_ms': latency_ms,
                 'timestamp': datetime.utcnow()
             })
+            self.session.commit()
+            time.sleep(2)  # Pause so failed is visible in dashboard
             return self._handle_retry(event_id, event_data, event_repo, log_repo, failure_type)
 
         else:  # permanent_failure
