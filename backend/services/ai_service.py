@@ -1,21 +1,22 @@
 import os
-from anthropic import Anthropic
 import logging
+import json
+import urllib.request
+import urllib.error
 
 logger = logging.getLogger(__name__)
 
 
 class AIService:
     def __init__(self):
-        api_key = os.getenv('ANTHROPIC_API_KEY')
+        self.api_key = os.getenv('GEMINI_API_KEY')
         self.debug_mode = os.getenv('ENVIRONMENT') == 'development'
-        self.client = Anthropic(api_key=api_key) if api_key and not self.debug_mode else None
-        if not api_key:
-            logger.warning('ANTHROPIC_API_KEY not set — AI disabled')
+        if not self.api_key:
+            logger.warning('GEMINI_API_KEY not set — AI disabled')
 
     async def analyze_failure(self, event_type, integration_type,
                                failure_type, failure_reason, logs, retry_count):
-        if self.debug_mode or not self.client:
+        if self.debug_mode or not self.api_key:
             return {
                 'root_cause': '[DEBUG] Simulated timeout — network unreachable to integration endpoint.',
                 'immediate_fix': '- Check network connectivity\n- Increase timeout threshold\n- Verify endpoint URL is correct',
@@ -23,36 +24,57 @@ class AIService:
                 'code_example': 'timeout_ms = 10000  # Increase from default 5000\nmax_retries = 5     # Increase retry attempts'
             }
 
-        prompt = f'''You are an expert integration engineer analyzing a webhook failure.
+        prompt = self._build_prompt(event_type, integration_type,
+                                     failure_type, failure_reason, logs, retry_count)
+        try:
+            url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.api_key}'
+            body = json.dumps({
+                'contents': [{'parts': [{'text': prompt}]}]
+            }).encode('utf-8')
 
-Event: {integration_type}.{event_type}
-Failure: {failure_type} — {failure_reason}
-Retries: {retry_count}
+            req = urllib.request.Request(
+                url, data=body,
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+            with urllib.request.urlopen(req) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                text = data['candidates'][0]['content']['parts'][0]['text']
+                return self._parse(text)
+        except Exception as e:
+            logger.error(f'Gemini API error: {e}')
+            return {
+                'root_cause': f'AI analysis failed: {str(e)}',
+                'immediate_fix': 'Check API key and network connectivity',
+                'prevention': 'Monitor API availability',
+                'code_example': ''
+            }
+
+    def _build_prompt(self, event_type, integration, failure_type,
+                      reason, logs, retries):
+        return f'''You are an expert integration engineer analyzing a webhook failure.
+
+Event: {integration}.{event_type}
+Failure: {failure_type} — {reason}
+Retries: {retries}
 Logs:
 {logs}
 
 Respond with EXACTLY these section headers:
 
 ## Root Cause
-[2-3 sentences]
+[2-3 sentences explaining why this failed]
 
 ## Immediate Fix
-- [action]
+- [specific action to take]
 
 ## Prevention Strategy
-- [strategy]
+- [strategy to prevent recurrence]
 
 ## Code Example
 ````python
-[code if applicable]
+[relevant code example]
 ```'''
-
-        response = self.client.messages.create(
-            model='claude-sonnet-4-20250514',
-            max_tokens=1500,
-            messages=[{'role': 'user', 'content': prompt}]
-        )
-        return self._parse(response.content[0].text)
 
     def _parse(self, text):
         sections = {
