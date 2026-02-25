@@ -10,9 +10,11 @@ class FailureEngine:
     def __init__(self, failure_rate: float = None):
         self.failure_rate = failure_rate or settings.default_failure_rate
 
-    def determine_outcome(self) -> tuple[str, FailureType | None]:
-        roll = random.random()
+    def determine_outcome(self, force_fail: bool = False) -> tuple[str, FailureType | None]:
+        if force_fail:
+            return 'permanent_failure', FailureType.VALIDATION_ERROR
 
+        roll = random.random()
         if roll < 0.50:
             return 'success', None
         elif roll < 0.65:
@@ -36,6 +38,7 @@ class EventProcessor:
         log_repo = LogRepository(self.session)
 
         event_id = event_data['event_id']
+        force_fail = event_data.get('event_type') == 'force_failure'
         start_time = time.time()
 
         # RECEIVED → VALIDATED
@@ -44,7 +47,7 @@ class EventProcessor:
             'log_id': str(uuid4()),
             'event_id': str(event_id),
             'level': LogLevel.INFO.value,
-            'message': f'Event validated: RECEIVED → VALIDATED',
+            'message': 'Event validated: RECEIVED → VALIDATED',
             'metadata': '{"previous": "received", "new": "validated"}',
             'duration_ms': None,
             'timestamp': datetime.utcnow()
@@ -74,8 +77,7 @@ class EventProcessor:
             'timestamp': datetime.utcnow()
         })
 
-        # Simulate processing time
-        outcome, failure_type = self.failure_engine.determine_outcome()
+        outcome, failure_type = self.failure_engine.determine_outcome(force_fail=force_fail)
         latency_ms = int((time.time() - start_time) * 1000)
 
         if outcome == 'success' or outcome == 'high_latency':
@@ -90,7 +92,7 @@ class EventProcessor:
                 'log_id': str(uuid4()),
                 'event_id': str(event_id),
                 'level': LogLevel.INFO.value,
-                'message': f'Event processed successfully: PROCESSING → SUCCESS',
+                'message': 'Event processed successfully: PROCESSING → SUCCESS',
                 'metadata': f'{{"previous": "processing", "new": "success", "latency_ms": {latency_ms}}}',
                 'duration_ms': latency_ms,
                 'timestamp': datetime.utcnow()
@@ -107,7 +109,7 @@ class EventProcessor:
                 'event_id': str(event_id),
                 'level': LogLevel.ERROR.value,
                 'message': 'Event timed out: PROCESSING → TIMED_OUT',
-                'metadata': f'{{"previous": "processing", "new": "timed_out", "retry_count": {event_data.get("retry_count", 0)}}}',
+                'metadata': f'{{"previous": "processing", "new": "timed_out"}}',
                 'duration_ms': latency_ms,
                 'timestamp': datetime.utcnow()
             })
@@ -123,7 +125,7 @@ class EventProcessor:
                 'event_id': str(event_id),
                 'level': LogLevel.ERROR.value,
                 'message': 'Event failed: PROCESSING → FAILED',
-                'metadata': f'{{"previous": "processing", "new": "failed", "retry_count": {event_data.get("retry_count", 0)}}}',
+                'metadata': f'{{"previous": "processing", "new": "failed"}}',
                 'duration_ms': latency_ms,
                 'timestamp': datetime.utcnow()
             })
@@ -156,17 +158,14 @@ class EventProcessor:
 
             event_repo.update_event_status(
                 event_id, EventStatus.RETRYING,
-                {
-                    'retry_count': new_retry_count,
-                    'next_retry_at': next_retry_at
-                }
+                {'retry_count': new_retry_count, 'next_retry_at': next_retry_at}
             )
             log_repo.create_log({
                 'log_id': str(uuid4()),
                 'event_id': str(event_id),
                 'level': LogLevel.WARNING.value,
                 'message': f'Retry scheduled: → RETRYING (attempt {new_retry_count}/{max_retries}, wait {wait_seconds}s)',
-                'metadata': f'{{"retry_count": {new_retry_count}, "wait_seconds": {wait_seconds}, "next_retry_at": "{next_retry_at.isoformat()}"}}',
+                'metadata': f'{{"retry_count": {new_retry_count}, "wait_seconds": {wait_seconds}}}',
                 'duration_ms': None,
                 'timestamp': datetime.utcnow()
             })
